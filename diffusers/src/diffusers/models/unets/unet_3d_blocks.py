@@ -2359,7 +2359,6 @@ class CrossAttnUpBlockSpatioTemporal(nn.Module):
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
 
             hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
-
             if self.training and self.gradient_checkpointing:  # TODO
 
                 def create_custom_forward(module, return_dict=None):

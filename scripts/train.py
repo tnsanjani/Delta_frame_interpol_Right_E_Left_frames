@@ -1,4 +1,3 @@
-"""Script to fine-tune Stable Video Diffusion."""
 import argparse
 import random
 import logging
@@ -8,6 +7,7 @@ import cv2
 import shutil
 from pathlib import Path
 from urllib.parse import urlparse
+from parse_args import parse_args
 
 import accelerate
 import numpy as np
@@ -37,7 +37,7 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available, load_image
 from diffusers.utils.import_utils import is_xformers_available
 
-
+from streodata import StereoEventDataset
 from src.dataset_crop_MStack_MScale import DummyDataset, get_valid_image_bins, UPSAMPLE_SCALE, apply_crop, CROP_x, CROP_y
 
 from src.models.unet_spatio_temporal_condition_fullControlnet import UNetSpatioTemporalConditionControlNetModel
@@ -51,9 +51,6 @@ from diffusers.training_utils import cast_training_params
 TRAIN_UPSCALE= UPSAMPLE_SCALE[0]
 
 VALID_UPSCALE= UPSAMPLE_SCALE[0]
-
-
-# Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.24.0.dev0")
 
 logger = get_logger(__name__, log_level="INFO")
@@ -72,8 +69,6 @@ lpips_metric = pyiqa.create_metric('lpips', device='cuda', as_loss=False)
 
 
 def _gaussian_blur2d_np(input, kernel_size, sigma):
-    
-
     input= cv2.GaussianBlur(input, kernel_size, sigma)
 
     return input
@@ -383,11 +378,21 @@ def export_to_gif(frames, output_gif_path, fps):
                        
 
 
-def tensor_to_vae_latent(t, vae):
+def tensor_to_vae_latent_2(t, vae):
     video_length = t.shape[1]
 
     t = rearrange(t, "b f c h w -> (b f) c h w")
-    latents = vae.encode(t).latent_dist.sample()
+    #latents = vae.encode(t.torch.half()).latent_dist.sample()
+    latents = vae.encode(((t - 0.5) * 2).to(device=vae.device, dtype=vae.dtype)).latent_dist.sample() * 0.18215
+    latents = rearrange(latents, "(b f) c h w -> b f c h w", f=video_length)
+    latents = latents * vae.config.scaling_factor
+    return latents
+
+
+def tensor_to_vae_latent(t, vae):
+    video_length = t.shape[1]
+    t = rearrange(t, "b f c h w -> (b f) c h w")
+    latents = vae.encode(t).latent_dist.sample().to(device=vae.device, dtype=vae.dtype)
     latents = rearrange(latents, "(b f) c h w -> b f c h w", f=video_length)
     latents = latents * vae.config.scaling_factor
 
@@ -437,315 +442,28 @@ def validate_once(val_save_dir, accelerator, pipeline, args, global_step, valid_
 
     return video_frames
 
+    import torch
+import torch.nn.functional as F
+from einops import rearrange
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Script to train Stable Video Diffusion."
-    )
-    parser.add_argument(
-        "--pretrained_model_name_or_path",
-        type=str,
-        default=None,
-        required=True,
-        help="Path to pretrained model or model identifier from huggingface.co/models.",
-    )
-    parser.add_argument(
-        "--revision",
-        type=str,
-        default=None,
-        required=False,
-        help="Revision of pretrained model identifier from huggingface.co/models.",
-    )
-    parser.add_argument(
-        "--num_frames",
-        type=int,
-        default=25,
-    )
-    parser.add_argument(
-        "--width",
-        type=int,
-        default=1024,
-    )
-    parser.add_argument(
-        "--height",
-        type=int,
-        default=576,
-    )
-    parser.add_argument(
-        "--num_validation_images",
-        type=int,
-        default=1,
-        help="Number of images that should be generated during validation with `validation_prompt`.",
-    )
-    parser.add_argument(
-        "--validation_steps",
-        type=int,
-        default=500,
-        help=(
-            "Run fine-tuning validation every X epochs. The validation process consists of running the text/image prompt"
-            " multiple times: `args.num_validation_images`."
-        ),
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="./outputs",
-        help="The output directory where the model predictions and checkpoints will be written.",
-    )
-    parser.add_argument(
-        "--seed", type=int, default=None, help="A seed for reproducible training."
-    )
-    parser.add_argument(
-        "--per_gpu_batch_size",
-        type=int,
-        default=1,
-        help="Batch size (per device) for the training dataloader.",
-    )
-    parser.add_argument("--num_train_epochs", type=int, default=100)
-    parser.add_argument(
-        "--max_train_steps",
-        type=int,
-        default=None,
-        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
-    )
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
-    parser.add_argument(
-        "--gradient_checkpointing",
-        action="store_true",
-        help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
-    )
-    parser.add_argument(
-        "--learning_rate",
-        type=float,
-        default=1e-4,
-        help="Initial learning rate (after the potential warmup period) to use.",
-    )
-    parser.add_argument(
-        "--scale_lr",
-        action="store_true",
-        default=False,
-        help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
-    )
-    parser.add_argument(
-        "--lr_scheduler",
-        type=str,
-        default="constant",
-        help=(
-            'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup"]'
-        ),
-    )
-    parser.add_argument(
-        "--lr_warmup_steps",
-        type=int,
-        default=500,
-        help="Number of steps for the warmup in the lr scheduler.",
-    )
-    parser.add_argument(
-        "--conditioning_dropout_prob",
-        type=float,
-        default=0.1,
-        help="Conditioning dropout probability. Drops out the conditionings (image and edit prompt) used in training InstructPix2Pix. See section 3.2.1 in the paper: https://arxiv.org/abs/2211.09800.",
-    )
-    parser.add_argument(
-        "--use_8bit_adam",
-        action="store_true",
-        help="Whether or not to use 8-bit Adam from bitsandbytes.",
-    )
-    parser.add_argument(
-        "--allow_tf32",
-        action="store_true",
-        help=(
-            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
-            " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
-        ),
-    )
-    parser.add_argument(
-        "--use_ema", action="store_true", help="Whether to use EMA model."
-    )
-    parser.add_argument(
-        "--non_ema_revision",
-        type=str,
-        default=None,
-        required=False,
-        help=(
-            "Revision of pretrained non-ema model identifier. Must be a branch, tag or git identifier of the local or"
-            " remote repository specified with --pretrained_model_name_or_path."
-        ),
-    )
-    parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=8,
-        help=(
-            "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
-        ),
-    )
-    parser.add_argument(
-        "--adam_beta1",
-        type=float,
-        default=0.9,
-        help="The beta1 parameter for the Adam optimizer.",
-    )
-    parser.add_argument(
-        "--adam_beta2",
-        type=float,
-        default=0.999,
-        help="The beta2 parameter for the Adam optimizer.",
-    )
-    parser.add_argument(
-        "--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use."
-    )
-    parser.add_argument(
-        "--adam_epsilon",
-        type=float,
-        default=1e-08,
-        help="Epsilon value for the Adam optimizer",
-    )
-    parser.add_argument(
-        "--max_grad_norm", default=1.0, type=float, help="Max gradient norm."
-    )
-    parser.add_argument(
-        "--push_to_hub",
-        action="store_true",
-        help="Whether or not to push the model to the Hub.",
-    )
-    parser.add_argument(
-        "--hub_token",
-        type=str,
-        default=None,
-        help="The token to use to push to the Model Hub.",
-    )
-    parser.add_argument(
-        "--hub_model_id",
-        type=str,
-        default=None,
-        help="The name of the repository to keep in sync with the local `output_dir`.",
-    )
-    parser.add_argument(
-        "--logging_dir",
-        type=str,
-        default="logs",
-        help=(
-            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
-        ),
-    )
-    parser.add_argument(
-        "--mixed_precision",
-        type=str,
-        default=None,
-        choices=["no", "fp16", "bf16"],
-        help=(
-            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
-            " 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"
-            " flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
-        ),
-    )
-    parser.add_argument(
-        "--report_to",
-        type=str,
-        default="tensorboard",
-        help=(
-            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
-            ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
-        ),
-    )
-    parser.add_argument(
-        "--local_rank",
-        type=int,
-        default=-1,
-        help="For distributed training: local_rank",
-    )
-    parser.add_argument(
-        "--checkpointing_steps",
-        type=int,
-        default=500,
-        help=(
-            "Save a checkpoint of the training state every X updates. These checkpoints are only suitable for resuming"
-            " training using `--resume_from_checkpoint`."
-        ),
-    )
-    parser.add_argument(
-        "--checkpoints_total_limit",
-        type=int,
-        default=2,
-        help=("Max number of checkpoints to store."),
-    )
-    parser.add_argument(
-        "--resume_from_checkpoint",
-        type=str,
-        default=None,
-        help=(
-            "Whether training should be resumed from a previous checkpoint. Use a path saved by"
-            ' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
-        ),
-    )
-    parser.add_argument(
-        "--enable_xformers_memory_efficient_attention",
-        action="store_true",
-        help="Whether or not to use xformers.",
-    )
-
-    parser.add_argument(
-        "--pretrain_unet",
-        type=str,
-        default=None,
-        help="use weight for unet block",
-    )
-
-    parser.add_argument(
-        "--controlnet_model_name_or_path",
-        type=str,
-        default=None,
-        help="Path to pretrained controlnet model or model identifier from huggingface.co/models."
-        " If not specified controlnet weights are initialized from unet.",
-    )
-
-    parser.add_argument(
-        "--train_data_path",
-        type=str,
-        default=None
-    )
-
-    parser.add_argument(
-        "--valid_path1",
-        type=str,
-        default=None
-    )
-    parser.add_argument(
-        "--valid_path1_idx",
-        type=int,
-        default=0
-    )
-    parser.add_argument(
-        "--valid_path2",
-        type=str,
-        default=None
-    )
-    parser.add_argument(
-        "--valid_path2_idx",
-        type=int,
-        default=0
-    )
+def resize_video_tensor(video_tensor, height, width, mode='bilinear'):
+    B, T = video_tensor.shape[0], video_tensor.shape[1]
+    x = rearrange(video_tensor, 'b t c h w -> (b t) c h w')
+    x = F.interpolate(x, size=(height, width), mode=mode, align_corners=False)
+    x = rearrange(x, '(b t) c h w -> b t c h w', b=B)
+    return x
 
 
+    # args = parser.parse_args()
+    # env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    # if env_local_rank != -1 and env_local_rank != args.local_rank:
+    #     args.local_rank = env_local_rank
 
-    args = parser.parse_args()
-    env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    if env_local_rank != -1 and env_local_rank != args.local_rank:
-        args.local_rank = env_local_rank
+    # # default to using the same revision for the non-ema model if not specified
+    # if args.non_ema_revision is None:
+    #     args.non_ema_revision = args.revision
 
-    # default to using the same revision for the non-ema model if not specified
-    if args.non_ema_revision is None:
-        args.non_ema_revision = args.revision
-
-    return args
+    # return args
 
 
 def download_image(url):
@@ -980,37 +698,16 @@ def main():
         rec_txt2.close()
 
 
-    
     # save the controlnet model to txt
     if accelerator.is_main_process:
         with open(os.path.join(args.output_dir, 'controlnet.txt'), 'w') as f:
             f.write(str(controlnet))
         
-
-        '''
-        Add metrics saving placeholders
-        '''
-        PSNR_list_train= []
-        SSIM_list_train= []
-        LPIPS_list_train= []
-
-        PSNR_list_valid= []
-        SSIM_list_valid= []
-        LPIPS_list_valid= []
-
-
-        if args.valid_path1 is not None:
-            gt_frames_valid1= get_video(args.valid_path1, args.valid_path1_idx, args.num_frames, args.width, args.height, scale= TRAIN_UPSCALE)
-
-        # gt_frames_valid2= get_video(VALID_PATH2, VALID_PATH2_IDX, args.num_frames, args.width, args.height, scale= VALID_UPSCALE)
-        if args.valid_path2 is not None:
-            gt_frames_valid2= get_video(args.valid_path2, args.valid_path2_idx, args.num_frames, args.width, args.height, scale= VALID_UPSCALE, test=True)
-
-
-    # DataLoaders creation:
     args.global_batch_size = args.per_gpu_batch_size * accelerator.num_processes
 
-    train_dataset = DummyDataset(args.train_data_path, width=args.width, height=args.height, sample_frames=args.num_frames)
+    train_dataset = StereoEventDataset(args.train_data_path,frame_height=args.height,frame_width=args.width,num_frames=args.num_frames)
+
+    #train_dataset = DummyDataset(args.train_data_path, width=args.width, height=args.height, sample_frames=args.num_frames)
     sampler = RandomSampler(train_dataset)
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -1086,7 +783,6 @@ def main():
         # We unnormalize it after resizing.
         pixel_values = (pixel_values + 1.0) / 2.0
 
-        # Normalize the image with for CLIP input
         pixel_values = feature_extractor(
             images=pixel_values,
             do_normalize=True,
@@ -1123,12 +819,10 @@ def main():
         add_time_ids = add_time_ids.repeat(batch_size, 1)
         return add_time_ids
 
-    # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
             path = os.path.basename(args.resume_from_checkpoint)
         else:
-            # Get the most recent checkpoint
             dirs = os.listdir(args.output_dir)
             dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
@@ -1150,9 +844,7 @@ def main():
             resume_step = resume_global_step % (
                 num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
-    # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(global_step, args.max_train_steps),
-                        disable=not accelerator.is_local_main_process)
+    progress_bar = tqdm(range(global_step, args.max_train_steps),disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
 
 
@@ -1167,89 +859,167 @@ def main():
                 continue
 
             with accelerator.accumulate(controlnet):
+
+                #bs_erg_data
                 # first, convert images to latent space.
-                pixel_values = batch["pixel_values"].to(weight_dtype).to(
-                    accelerator.device, non_blocking=True
-                )
-                conditional_pixel_values = pixel_values[:, 0:1, :, :, :]
+                # pixel_values = batch["pixel_values"].to(weight_dtype).to(
+                #     accelerator.device, non_blocking=True
+                # )
+                # print(f' pixel values rgbshape is {pixel_values.shape}')
+                # conditional_pixel_values = pixel_values[:, 0:1, :, :, :]
+                # print(f' conditional_pixel_values values rgbshape is {conditional_pixel_values.shape}')
+                # print('-------------')
 
-                latents = tensor_to_vae_latent(pixel_values, vae)
+                # latents = tensor_to_vae_latent(pixel_values, vae)
+                # print(f'latents shape is {latents.shape}')
 
-                # Sample noise that we'll add to the latents
+                # # Sample noise that we'll add to the latents
+                # noise = torch.randn_like(latents)
+                # bsz = latents.shape[0]
+
+                # cond_sigmas = rand_log_normal(shape=[bsz,], loc=-3.0, scale=0.5).to(latents)
+                # noise_aug_strength = cond_sigmas[0] # TODO: support batch > 1
+                # cond_sigmas = cond_sigmas[:, None, None, None, None]
+                # conditional_pixel_values = \
+                #     torch.randn_like(conditional_pixel_values) * cond_sigmas + conditional_pixel_values
+                # conditional_latents = tensor_to_vae_latent(conditional_pixel_values, vae)[:, 0, :, :, :]
+                # print(f'condiitonal latents shape is {conditional_latents.shape}')
+                # conditional_latents = conditional_latents / vae.config.scaling_factor
+
+                # # Sample a random timestep for each image
+                # # P_mean=0.7 P_std=1.6
+                # sigmas = rand_log_normal(shape=[bsz,], loc=0.7, scale=1.6).to(latents.device)
+                # # Add noise to the latents according to the noise magnitude at each timestep
+                # # (this is the forward diffusion process)
+                # sigmas = sigmas[:, None, None, None, None]
+                # noisy_latents = latents + noise * sigmas
+                # timesteps = torch.Tensor(
+                #     [0.25 * sigma.log() for sigma in sigmas]).to(accelerator.device)
+
+                # inp_noisy_latents = noisy_latents / ((sigmas**2 + 1) ** 0.5)
+
+                # # Get the text embedding for conditioning.
+                # encoder_hidden_states = encode_image(
+                #     pixel_values[:, 0, :, :, :].float())
+
+
+                # added_time_ids = _get_add_time_ids(
+                #     7, # fixed
+                #     127, # motion_bucket_id = 127, fixed
+                #     noise_aug_strength, # noise_aug_strength == cond_sigmas
+                #     encoder_hidden_states.dtype,
+                #     bsz,
+                # )
+                # added_time_ids = added_time_ids.to(latents.device)
+
+                # if args.conditioning_dropout_prob is not None:
+                #     random_p = torch.rand(
+                #         bsz, device=latents.device, generator=generator)
+                #     # Sample masks for the edit prompts.
+                #     prompt_mask = random_p < 2 * args.conditioning_dropout_prob
+                #     prompt_mask = prompt_mask.reshape(bsz, 1, 1)
+                #     # Final text conditioning.
+                #     null_conditioning = torch.zeros_like(encoder_hidden_states)
+                #     encoder_hidden_states = torch.where(
+                #         prompt_mask, null_conditioning.unsqueeze(1), encoder_hidden_states.unsqueeze(1))
+                #     # Sample masks for the original images.
+                #     image_mask_dtype = conditional_latents.dtype
+                #     image_mask = 1 - (
+                #         (random_p >= args.conditioning_dropout_prob).to(
+                #             image_mask_dtype)
+                #         * (random_p < 3 * args.conditioning_dropout_prob).to(image_mask_dtype)
+                #     )
+                #     image_mask = image_mask.reshape(bsz, 1, 1, 1)
+                #     # Final image conditioning.
+                #     conditional_latents = image_mask * conditional_latents
+
+                # # Concatenate the `conditional_latents` with the `noisy_latents`.
+                # conditional_latents = conditional_latents.unsqueeze(
+                #     1).repeat(1, noisy_latents.shape[1], 1, 1, 1)
+                # print(f'initial inp_noisy_latents below is {inp_noisy_latents.shape} and {conditional_latents.shape} beofre concatination')
+                # inp_noisy_latents = torch.cat(
+                #     [inp_noisy_latents, conditional_latents], dim=2)
+                
+                # print(f'after concatination  {inp_noisy_latents.shape}')
+
+                # target = latents
+                # controlnet_image= batch["event_values"].to(weight_dtype).to(
+                #     accelerator.device, non_blocking=True
+                # )
+
+                
+    
+                ######## new changed
+                #streo_data
+                video_name = batch['video_name'][0]
+                left_data = batch['left']
+                right_data = batch['right']
+                right_events = right_data['events'].to(accelerator.device, dtype=weight_dtype, non_blocking=True)
+
+                #adding noise to target right rgb frames
+                right_data['pixel_values'] = resize_video_tensor(right_data['pixel_values'], height = args.height, width = args.width)
+                right_data['pixel_values'] = right_data['pixel_values'].to(dtype=vae.dtype)
+                #print(f"for latents input, {right_data['pixel_values'].shape}")
+                latents = tensor_to_vae_latent(right_data['pixel_values'],vae)
+                #print(f' latentst hsape sin {latents.shape}')
                 noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
-
                 cond_sigmas = rand_log_normal(shape=[bsz,], loc=-3.0, scale=0.5).to(latents)
-                noise_aug_strength = cond_sigmas[0] # TODO: support batch > 1
+                noise_aug_strength = cond_sigmas[0] 
                 cond_sigmas = cond_sigmas[:, None, None, None, None]
-                conditional_pixel_values = \
-                    torch.randn_like(conditional_pixel_values) * cond_sigmas + conditional_pixel_values
-                conditional_latents = tensor_to_vae_latent(conditional_pixel_values, vae)[:, 0, :, :, :]
-                conditional_latents = conditional_latents / vae.config.scaling_factor
 
-                # Sample a random timestep for each image
-                # P_mean=0.7 P_std=1.6
+                #left rgb's latent and CLIP embedding
+                pixel_values = left_data["pixel_values"].to(weight_dtype).to(accelerator.device, non_blocking=True)
+                B, T, C, H, W = pixel_values.shape
+                pixel_values = pixel_values.view(B * T, C, H, W)
+                pixel_values = F.interpolate(pixel_values,size=(args.height, args.width),mode="bilinear",align_corners=False)
+                pixel_values = pixel_values.view(B, T, C, args.height, args.width)
+                conditional_pixel_values = pixel_values[:, 0:1, :, :, :]
+                #print(f'conaditoinlatent is {conditional_pixel_values.shape}')
+                conditional_pixel_values = torch.randn_like(conditional_pixel_values) * cond_sigmas + conditional_pixel_values
+
+                conditional_latents = tensor_to_vae_latent(conditional_pixel_values, vae)[:, 0, :, :, :]  #-- initial one
+                
+                # conditional_latents = tensor_to_vae_latent(conditional_pixel_values, vae)  #--changed for streo_data  
+                # conditional_latents = conditional_latents.unsqueeze(0)    
+                # conditional_latents =conditional_latents[:, 0, :, :,:]
+                conditional_latents = conditional_latents / vae.config.scaling_factor
+                encoder_hidden_states = encode_image(pixel_values[:, 0, :, :, :].float())
+
                 sigmas = rand_log_normal(shape=[bsz,], loc=0.7, scale=1.6).to(latents.device)
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
                 sigmas = sigmas[:, None, None, None, None]
                 noisy_latents = latents + noise * sigmas
-                timesteps = torch.Tensor(
-                    [0.25 * sigma.log() for sigma in sigmas]).to(accelerator.device)
-
+                timesteps = torch.Tensor([0.25 * sigma.log() for sigma in sigmas]).to(accelerator.device)
                 inp_noisy_latents = noisy_latents / ((sigmas**2 + 1) ** 0.5)
 
-                # Get the text embedding for conditioning.
-                encoder_hidden_states = encode_image(
-                    pixel_values[:, 0, :, :, :].float())
-
-
-                added_time_ids = _get_add_time_ids(
-                    7, # fixed
-                    127, # motion_bucket_id = 127, fixed
-                    noise_aug_strength, # noise_aug_strength == cond_sigmas
-                    encoder_hidden_states.dtype,
-                    bsz,
-                )
+                added_time_ids = _get_add_time_ids(7, 127,noise_aug_strength,encoder_hidden_states.dtype,bsz)
                 added_time_ids = added_time_ids.to(latents.device)
-
-                # Conditioning dropout to support classifier-free guidance during inference. For more details
-                # check out the section 3.2.1 of the original paper https://arxiv.org/abs/2211.09800.
                 if args.conditioning_dropout_prob is not None:
-                    random_p = torch.rand(
-                        bsz, device=latents.device, generator=generator)
-                    # Sample masks for the edit prompts.
+                    random_p = torch.rand(bsz, device=latents.device, generator=generator)
                     prompt_mask = random_p < 2 * args.conditioning_dropout_prob
                     prompt_mask = prompt_mask.reshape(bsz, 1, 1)
-                    # Final text conditioning.
+
                     null_conditioning = torch.zeros_like(encoder_hidden_states)
-                    encoder_hidden_states = torch.where(
-                        prompt_mask, null_conditioning.unsqueeze(1), encoder_hidden_states.unsqueeze(1))
-                    # Sample masks for the original images.
+                    encoder_hidden_states = torch.where(prompt_mask, null_conditioning.unsqueeze(1), encoder_hidden_states.unsqueeze(1))
                     image_mask_dtype = conditional_latents.dtype
-                    image_mask = 1 - (
-                        (random_p >= args.conditioning_dropout_prob).to(
-                            image_mask_dtype)
-                        * (random_p < 3 * args.conditioning_dropout_prob).to(image_mask_dtype)
-                    )
+                    image_mask = 1 - ((random_p >= args.conditioning_dropout_prob).to(image_mask_dtype)* (random_p < 3 * args.conditioning_dropout_prob).to(image_mask_dtype))
                     image_mask = image_mask.reshape(bsz, 1, 1, 1)
-                    # Final image conditioning.
                     conditional_latents = image_mask * conditional_latents
+                conditional_latents = conditional_latents.unsqueeze(1).repeat(1, noisy_latents.shape[1], 1, 1, 1)
+                
 
-                # Concatenate the `conditional_latents` with the `noisy_latents`.
-                conditional_latents = conditional_latents.unsqueeze(
-                    1).repeat(1, noisy_latents.shape[1], 1, 1, 1)
-                inp_noisy_latents = torch.cat(
-                    [inp_noisy_latents, conditional_latents], dim=2)
-
-                # check https://arxiv.org/abs/2206.00364(the EDM-framework) for more details.
+                #print(f'initial inp_noisy_latents below is {inp_noisy_latents.shape} and {conditional_latents.shape} beofre concatination')
+                inp_noisy_latents = torch.cat([inp_noisy_latents, conditional_latents], dim=2)
+                #print(f'inp_noisy_latents below is {inp_noisy_latents.shape}')
                 target = latents
-                controlnet_image= batch["event_values"].to(weight_dtype).to(
-                    accelerator.device, non_blocking=True
-                )
 
+                #right camera events as condition
+                B, T = right_events.shape[0], right_events.shape[1]
+                right_events = rearrange(right_events, 'b t c h w -> (b t) c h w')
+                right_events = F.interpolate(right_events,size=(args.height, args.width), mode='bilinear',align_corners=False)
+                right_events = rearrange(right_events, '(b t) c h w -> b t c h w', b=B)
+                controlnet_image= right_events.to(weight_dtype).to(accelerator.device, non_blocking=True)
 
-        
                 down_block_res_samples, mid_block_res_sample= controlnet(
                     inp_noisy_latents, timesteps, encoder_hidden_states,
                     added_time_ids=added_time_ids,
@@ -1335,171 +1105,11 @@ def main():
                             args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
-                    # sample images!
-                    if (
-                        (global_step % args.validation_steps == 0)
-                        or (global_step == 1)
-                    ):
-                        logger.info(
-                            f"Running validation... \n Generating {args.num_validation_images} videos."
-                        )
-                        # create pipeline
-                        if args.use_ema:
-                            # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
-                            ema_controlnet.store(unet.parameters())
-                            ema_controlnet.copy_to(unet.parameters())
-                        # The models need unwrapping because for compatibility in distributed training mode.
-                        pipeline = StableVideoDiffusionPipelineControlNet.from_pretrained(
-                            args.pretrained_model_name_or_path,
-                            unet=accelerator.unwrap_model(unet),
-                            image_encoder=accelerator.unwrap_model(
-                                image_encoder),
-                            controlnet=accelerator.unwrap_model(controlnet),
-                            vae=accelerator.unwrap_model(vae),
-                            revision=args.revision,
-                            torch_dtype=weight_dtype,
-                        )
-                        pipeline = pipeline.to(accelerator.device)
-                        pipeline.set_progress_bar_config(disable=True)
-
-                        # run inference
-                        val_save_dir = os.path.join(
-                            args.output_dir, "validation_images")
-
-                        if not os.path.exists(val_save_dir):
-                            os.makedirs(val_save_dir)
-
-                        valid_save_dir1 = os.path.join(val_save_dir, 'train')
-
-                        if not os.path.exists(valid_save_dir1):
-                            os.makedirs(valid_save_dir1)
-                        
-                        valid_save_dir2 = os.path.join(val_save_dir, 'valid')
-
-                        if not os.path.exists(valid_save_dir2):
-                            os.makedirs(valid_save_dir2)
 
 
-                        if args.valid_path1 is not None:
-                            # valid on train
-                            video_frames_train= validate_once(
-                                val_save_dir= valid_save_dir1,
-                                accelerator=accelerator,
-                                pipeline=pipeline,
-                                args=args,
-                                global_step=global_step,
-                                valid_image_path=args.valid_path1, 
-                                idx= args.valid_path1_idx,
-                                scale= TRAIN_UPSCALE
-                            )
-
-
-                        if args.valid_path2 is not None:
-                            # valid on test
-                            video_frames_valid= validate_once(
-                                val_save_dir= valid_save_dir2,
-                                accelerator=accelerator,
-                                pipeline=pipeline,
-                                args=args,
-                                global_step=global_step,
-                                valid_image_path=args.valid_path2,
-                                idx= args.valid_path2_idx,
-                                scale= VALID_UPSCALE,
-                            )
-
-
-
-                        if args.valid_path1 is not None:
-                            valid_video1= np.array(video_frames_train)
-                        if args.valid_path2 is not None:
-                            valid_video2= np.array(video_frames_valid)
-
-
-                        if args.valid_path1 is not None:
-                            psnr_train= calculate_psnr(valid_video1, gt_frames_valid1)
-
-                            ssim_train= calculate_ssim(valid_video1, gt_frames_valid1)
-
-                            lpips_train= calculate_lpips(valid_video1, gt_frames_valid1)
-
-                            PSNR_list_train.append(psnr_train)
-
-                            x_axis = np.arange(1, len(PSNR_list_train)+1, 1) * args.validation_steps
-                            plt.figure()
-                            plt.plot(x_axis, PSNR_list_train)
-                            plt.savefig(os.path.join(args.output_dir, 'PSNR_Curve_train.png'))
-
-                            plt.close()
-
-                            SSIM_list_train.append(ssim_train)
-
-                            x_axis = np.arange(1, len(SSIM_list_train)+1, 1) * args.validation_steps
-                            plt.figure()
-                            plt.plot(x_axis, SSIM_list_train)
-                            plt.savefig(os.path.join(args.output_dir, 'SSIM_Curve_train.png'))
-
-                            plt.close()
-
-                            LPIPS_list_train.append(lpips_train)
-
-                            x_axis = np.arange(1, len(LPIPS_list_train)+1, 1) * args.validation_steps
-                            plt.figure()
-                            plt.plot(x_axis, LPIPS_list_train)
-                            plt.savefig(os.path.join(args.output_dir, 'LPIPS_Curve_train.png'))
-
-                        if args.valid_path2 is not None:
-                            psnr_valid= calculate_psnr(valid_video2, gt_frames_valid2)
-
-                            ssim_valid= calculate_ssim(valid_video2, gt_frames_valid2)
-
-                            lpips_valid= calculate_lpips(valid_video2, gt_frames_valid2)
-
-                            PSNR_list_valid.append(psnr_valid)
-
-                            x_axis = np.arange(1, len(PSNR_list_valid)+1, 1) * args.validation_steps
-                            plt.figure()
-                            plt.plot(x_axis, PSNR_list_valid)
-                            plt.savefig(os.path.join(args.output_dir, 'PSNR_Curve_valid.png'))
-
-                            plt.close()
-
-                            SSIM_list_valid.append(ssim_valid)
-
-                            x_axis = np.arange(1, len(SSIM_list_valid)+1, 1) * args.validation_steps
-                            plt.figure()
-                            plt.plot(x_axis, SSIM_list_valid)
-                            plt.savefig(os.path.join(args.output_dir, 'SSIM_Curve_valid.png'))
-
-                            plt.close()
-
-                            LPIPS_list_valid.append(lpips_valid)
-
-                            x_axis = np.arange(1, len(LPIPS_list_valid)+1, 1) * args.validation_steps
-                            plt.figure()
-                            plt.plot(x_axis, LPIPS_list_valid)
-                            plt.savefig(os.path.join(args.output_dir, 'LPIPS_Curve_valid.png'))
-
-                        if global_step == 1:
-                            save_gt_video_path_train= os.path.join(args.output_dir, 'gt_train.mp4')
-
-                            save_gt_video_path_valid= os.path.join(args.output_dir, 'gt_valid.mp4')
-
-                            if args.valid_path1 is not None:
-                                export_to_gif(gt_frames_valid1, save_gt_video_path_train, 8)
-                            if args.valid_path2 is not None:
-                                export_to_gif(gt_frames_valid2, save_gt_video_path_valid, 8)
-                        
-
-
-                        if args.use_ema:
-                            # Switch back to the original UNet parameters.
-                            ema_controlnet.restore(controlnet.parameters())
-
-                        del pipeline
                         torch.cuda.empty_cache()
 
-            logs = {"step_loss": loss.detach().item(
-            ), "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:

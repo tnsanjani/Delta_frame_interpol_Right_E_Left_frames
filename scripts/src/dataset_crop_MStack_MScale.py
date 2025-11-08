@@ -231,7 +231,7 @@ class DummyDataset(Dataset):
         self.valid = valid
 
     def __len__(self):
-        train_txt= os.path.join(self.base_folder, "../TRAINING.txt")
+        train_txt= os.path.join("/u/nthadishetty/bs_ergb_data/processed_data/TRAINING.txt")
 
         with open(train_txt) as f:
             num_samples = f.readlines()
@@ -542,7 +542,7 @@ def get_valid_image_bins(image_path, idx, width, height, num_frames, scale= UPSA
                 image_weigth, image_height = img.size
 
                 img= img.resize((int(image_weigth * scale), int(image_height * scale)))
-
+       
                 '''
                 Code block for scale event image: end
                 '''
@@ -567,6 +567,7 @@ def get_valid_image_bins(image_path, idx, width, height, num_frames, scale= UPSA
                 bins! not i: ev_pixel_values[i][bins] !!!!!!
                 '''
                 ev_pixel_values[i][bins] = img_normalized
+                print(f' pixel values shape is {ev_pixel_values.shape}')
     
 
     return valid_image, ev_pixel_values

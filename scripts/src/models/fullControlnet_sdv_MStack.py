@@ -122,8 +122,6 @@ class ControlNetConditioningEmbeddingSVD(nn.Module):
         #actually not needed
         #new_channels, new_height, new_width = embedding.shape[1], embedding.shape[2], embedding.shape[3]
         #embedding = embedding.view(batch_size, frames, new_channels, new_height, new_width)
-
-
         return embedding
 
 
@@ -495,6 +493,7 @@ class ControlNetSDVModel(ModelMixin, ConfigMixin, FromOriginalControlNetMixin):
             timesteps = timesteps[None].to(sample.device)
 
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+        #print(f' initial sample shape is {sample.shape}')
         batch_size, num_frames = sample.shape[:2]
         timesteps = timesteps.expand(batch_size)
 
@@ -524,15 +523,16 @@ class ControlNetSDVModel(ModelMixin, ConfigMixin, FromOriginalControlNetMixin):
 
         # 2. pre-process
         sample = self.conv_in(sample)
-        
+#         print(f'secodn pahse smaple size is {sample.shape}')
+#         sample = F.interpolate(sample,size=(40, 64), # (40, 64)
+#     mode='bilinear', 
+#     align_corners=False
+# )
+       
         #controlnet cond
         if controlnet_cond != None:
-    
-
             controlnet_cond = self.controlnet_cond_embedding(controlnet_cond)
-
-     
-         
+            #print(f'sample shape is {sample.shape} and evenst condition shape is {controlnet_cond.shape}')
             sample = sample + controlnet_cond
         
 

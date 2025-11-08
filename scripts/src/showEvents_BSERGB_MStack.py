@@ -591,7 +591,7 @@ def main():
             
             for j in range(len(os.listdir(event_folder)) + 1):
 
-                if '3_TRAINING' not in folder:
+                if '1_TRAIN' not in folder:
                     continue
 
 
