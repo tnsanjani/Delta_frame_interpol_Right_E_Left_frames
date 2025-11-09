@@ -12,7 +12,7 @@ accelerate launch train.py \
     --seed=123 \
     --mixed_precision="fp16" \
     --validation_steps=200 \
-    --num_frames=15 \
+    --num_frames=10\
     --num_workers=4 \
     --enable_xformers_memory_efficient_attention \
     --resume_from_checkpoint="latest" \
@@ -36,7 +36,18 @@ accelerate launch train.py \
 
 #--multi_gpu --num_processes 4
 #module load anaconda3_gpu
-#srun -A bfsm-delta-gpu \--partition=gpuA100x4 \--nodes=1 \--ntasks=1 \--gpus-per-node=2 \--mem=100G  \--pty bash
+#srun -A bfsm-delta-gpu \--partition=gpuA100x4 \--nodes=1 \--ntasks=1 \--gpus-per-node=2 \--mem=100G \--time=20:00:00  \--pty bash
+
+#time left -- squeue -u $USER -o "%.10i %.12j %.2t %.10M %.10l %.10L"
+
+#Screen alternative
+
+#tmux new -s mysession
+# Ctrl + b, then d
+# tmux ls
+# tmux kill-session -t mysession
+
+
 
 #LEFT_RGB, RIGHT EVENT INPUT SHAPES
 #  first left rgb shape is torch.Size([1, 3, 375, 375]) and last is torch.Size([1, 3, 375, 375]) 

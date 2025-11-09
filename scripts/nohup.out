@@ -1,0 +1,51 @@
+/u/nthadishetty/.local/lib/python3.9/site-packages/torch/cuda/__init__.py:829: UserWarning: Can't initialize NVML
+  warnings.warn("Can't initialize NVML")
+W1108 20:19:42.891590 3598882 torch/distributed/elastic/agent/server/api.py:723] Received Signals.SIGINT death signal, shutting down workers
+W1108 20:19:42.892948 3598882 torch/distributed/elastic/multiprocessing/api.py:900] Sending process 3601424 closing signal SIGINT
+W1108 20:19:42.893964 3598882 torch/distributed/elastic/multiprocessing/api.py:900] Sending process 3601431 closing signal SIGINT
+Traceback (most recent call last):
+  File "/u/nthadishetty/VDM_EVFI/scripts/train.py", line 12, in <module>
+    import accelerate
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/accelerate/__init__.py", line 16, in <module>
+    from .accelerator import Accelerator
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/accelerate/accelerator.py", line 32, in <module>
+    import torch
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/__init__.py", line 416, in <module>
+    from torch._C import *  # noqa: F403
+  File "<frozen importlib._bootstrap>", line 203, in _lock_unlock_module
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/u/nthadishetty/VDM_EVFI/scripts/train.py", line 12, in <module>
+    import accelerate
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/accelerate/__init__.py", line 16, in <module>
+    from .accelerator import Accelerator
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/accelerate/accelerator.py", line 32, in <module>
+    import torch
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/__init__.py", line 416, in <module>
+    from torch._C import *  # noqa: F403
+  File "<frozen importlib._bootstrap>", line 203, in _lock_unlock_module
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/u/nthadishetty/.local/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/accelerate/commands/accelerate_cli.py", line 48, in main
+    args.func(args)
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/accelerate/commands/launch.py", line 1159, in launch_command
+    multi_gpu_launcher(args)
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/accelerate/commands/launch.py", line 793, in multi_gpu_launcher
+    distrib_run.run(args)
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/distributed/run.py", line 892, in run
+    elastic_launch(
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/distributed/launcher/api.py", line 143, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/distributed/launcher/api.py", line 268, in launch_agent
+    result = agent.run()
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/distributed/elastic/agent/server/api.py", line 715, in run
+    result = self._invoke_run(role)
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/distributed/elastic/agent/server/api.py", line 879, in _invoke_run
+    time.sleep(monitor_interval)
+  File "/u/nthadishetty/.local/lib/python3.9/site-packages/torch/distributed/elastic/multiprocessing/api.py", line 84, in _terminate_process_handler
+    raise SignalException(f"Process {os.getpid()} got signal: {sigval}", sigval=sigval)
+torch.distributed.elastic.multiprocessing.api.SignalException: Process 3598882 got signal: 2

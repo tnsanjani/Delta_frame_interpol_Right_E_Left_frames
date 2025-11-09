@@ -128,7 +128,6 @@ class StereoEventDataset(Dataset):
                 
                 if idx < len(event_paths):
                     img = cv2.imread(event_paths[idx], cv2.IMREAD_UNCHANGED) 
-                    print(img.shape)
                     filtered = StereoEventDataset.great_filter(img) 
                     channels.append(filtered)
                 else:
